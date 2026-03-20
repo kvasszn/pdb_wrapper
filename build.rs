@@ -57,6 +57,7 @@ fn main() {
     println!("cargo:rerun-if-changed={}", dst.display());
 
     println!("cargo:rustc-link-lib=static=llvm-pdb-wrapper");
+    println!("cargo:rustc-link-search=native=C:\\Program Files\\LLVM\\lib");
     println!("cargo:rustc-link-lib=llvm-pdb-wrapper");
 
     version_specific_init();
@@ -66,7 +67,7 @@ fn main() {
         println!("cargo:rustc-link-lib=z");
         println!("cargo:rustc-link-lib=stdc++");
     } else if cfg!(windows) {
-        println!("cargo:rustc-link-lib=zlib");
+        //println!("cargo:rustc-link-lib=zlib");
     }
 
     println!("cargo:rerun-if-changed=libllvm-pdb-wrapper/wrapper.hpp");

@@ -248,9 +248,21 @@ impl PDB {
                     PDBType::Pointer(ptr) if self.is_existing_type(inner.as_ref()) => Ok(self
                         .get_existing_type(ptr.as_ref())
                         .expect("Inconsistent types, this is a bug!")),
-                    PDBType::Struct(name) => self
-                        .get_existing_type(inner.as_ref())
-                        .ok_or(Error::UnknownType { ty: name.clone() }),
+                    //PDBType::Struct(name) => self
+                    //    .get_existing_type(inner.as_ref())
+                    //    .ok_or(Error::UnknownType { ty: name.clone() }),
+                    PDBType::Struct(name) => {
+                        if let Some(ty) = self.get_existing_type(inner.as_ref()) {
+                            Ok(ty)
+                        } else {
+                            let raw_name = CString::new(name.as_str()).unwrap();
+                            let fwd_idx =
+                                unsafe { PDB_File_Add_Forward_Ref(self.handle, raw_name.as_ptr()) };
+
+                            self.types.insert(inner.as_ref().clone(), fwd_idx);
+                            Ok(fwd_idx)
+                        }
+                    }
                     PDBType::ConstantArray(_, _) => {
                         unimplemented!("Pointer to array isn't supported yet!");
                     }

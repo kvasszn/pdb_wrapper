@@ -1,5 +1,7 @@
 cmake_minimum_required (VERSION 3.13)
 project(llvm-pdb-wrapper CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(LLVM REQUIRED CONFIG)
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")

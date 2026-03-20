@@ -13,6 +13,8 @@
 #include <llvm/Object/COFF.h>
 #include <llvm/DebugInfo/PDB/Native/TpiHashing.h>
 #include <llvm/DebugInfo/CodeView/SymbolSerializer.h>
+#include "llvm/Support/Allocator.h"
+#include "llvm/Support/StringSaver.h"
 
 #include "wrapper.hpp"
 
@@ -25,6 +27,12 @@ class pdb_file {
     std::unique_ptr<llvm::pdb::PDBFileBuilder> m_pdb_builder;
     std::unique_ptr<AppendingTypeTableBuilder> m_type_builder;
     std::unique_ptr<AppendingTypeTableBuilder> m_id_builder;
+    // This arena holds the raw memory
+    llvm::BumpPtrAllocator Alloc;
+
+    // This is a utility that writes strings into the Allocator
+    // and hands you back a safe StringRef.
+    llvm::StringSaver Saver{Alloc};
 #if LLVM_VERSION_MAJOR > 10
     std::vector<llvm::pdb::BulkPublic> m_PublicsSyms;
 #endif
@@ -50,6 +58,8 @@ public:
 
     TypeIndex
     add_struct(const char *name, TypeIndex fields, uint16_t fieldCount, uint64_t size);
+
+    TypeIndex add_forward_ref(const char *name);
 
     static void add_field(ContinuationRecordBuilder *cbr, TypeIndex type, uint64_t offset,
                           const char *name);
@@ -185,7 +195,8 @@ pdb_file::add_function_symbol(const char *name, uint16_t section_index, uint32_t
     auto proc = ProcSym(SymbolRecordKind::GlobalProcSym);
     auto frameproc = FrameProcSym(SymbolRecordKind::FrameProcSym);
     auto end = ScopeEndSym(SymbolRecordKind::ScopeEndSym);
-    proc.Name = name;
+    llvm::StringRef s_name = Saver.save(name);
+    proc.Name = s_name.data();
     proc.Segment = section_index;
     proc.CodeOffset = section_offset;
     proc.FunctionType = fntype;
@@ -211,7 +222,10 @@ void pdb_file::add_function_symbol(const char *name, uint16_t section_index, uin
     auto symbol = PublicSym32(SymbolKind::S_PUB32);
 #endif
 
-    symbol.Name = name;
+    llvm::StringRef s_name = Saver.save(name);
+    symbol.Name = s_name.data();
+    symbol.NameLen = s_name.size();
+
 #if LLVM_VERSION_MAJOR > 10
     symbol.Flags |= static_cast<uint16_t>(PublicSymFlags::Function);
 #else
@@ -231,7 +245,8 @@ void pdb_file::add_global_symbol(const char *name, uint16_t section_index, uint3
     add_global_symbol(name, section_index, section_offset);
 
     auto symbol = DataSym(SymbolKind::S_GDATA32);
-    symbol.Name = name;
+    llvm::StringRef s_name = Saver.save(name);
+    symbol.Name = s_name.data();
     symbol.Segment = section_index;
     symbol.DataOffset = section_offset;
     symbol.Type = typeIndex;
@@ -252,7 +267,9 @@ void pdb_file::add_global_symbol(const char *name, uint16_t section_index, uint3
 #else
     auto symbol = PublicSym32(SymbolKind::S_PUB32);
 #endif
-    symbol.Name = name;
+    llvm::StringRef s_name = Saver.save(name);
+    symbol.Name = s_name.data();
+    symbol.NameLen = s_name.size();
     symbol.Segment = section_index;
     symbol.Offset = section_offset;
 #if LLVM_VERSION_MAJOR > 10
@@ -341,6 +358,24 @@ TypeIndex pdb_file::add_struct(const char *name, TypeIndex fields, uint16_t fiel
                                    TypeIndex::None(), size, name, name);
 
     return m_type_builder->writeLeafType(classRecord);
+}
+
+TypeIndex pdb_file::add_forward_ref(const char *name) {
+    llvm::StringRef safe_name = Saver.save(name);
+
+    llvm::codeview::ClassRecord FwdRef(
+        llvm::codeview::TypeRecordKind::Struct,
+        0,
+        llvm::codeview::ClassOptions::ForwardReference,
+        llvm::codeview::TypeIndex(),
+        llvm::codeview::TypeIndex(),
+        llvm::codeview::TypeIndex(),
+        0,
+        safe_name,
+        safe_name
+    );
+
+    return m_type_builder->writeLeafType(FwdRef);
 }
 
 
@@ -452,4 +487,9 @@ EXPORT uint32_t PDB_File_Add_Array(void *Instance, uint32_t Type, uint64_t Size)
     const auto type = TypeIndex{Type};
     auto pdb = (pdb_file *) Instance;
     return pdb->add_array_type(type, Size).getIndex();
+}
+
+EXPORT uint32_t PDB_File_Add_Forward_Ref(void* Instance, const char* name) {
+    auto pdb = (pdb_file *) Instance;
+    return pdb->add_forward_ref(name).getIndex();
 }
