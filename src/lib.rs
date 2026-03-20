@@ -363,6 +363,10 @@ impl PDB {
             )
         };
 
+        unsafe {
+            //    PDB_File_Add_UDT(self.handle, raw_name.as_ptr(), ty);
+        }
+
         self.types.insert(PDBType::Struct(name.to_string()), ty);
 
         Ok(())

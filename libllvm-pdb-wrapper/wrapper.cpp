@@ -1,3 +1,4 @@
+#include <cstdio>
 #include <llvm/DebugInfo/MSF/MSFBuilder.h>
 #include <llvm/DebugInfo/PDB/Native/PDBFileBuilder.h>
 #include <llvm/DebugInfo/PDB/Native/DbiStreamBuilder.h>
@@ -27,12 +28,10 @@ class pdb_file {
     std::unique_ptr<llvm::pdb::PDBFileBuilder> m_pdb_builder;
     std::unique_ptr<AppendingTypeTableBuilder> m_type_builder;
     std::unique_ptr<AppendingTypeTableBuilder> m_id_builder;
-    // This arena holds the raw memory
-    llvm::BumpPtrAllocator Alloc;
 
-    // This is a utility that writes strings into the Allocator
-    // and hands you back a safe StringRef.
+    llvm::BumpPtrAllocator Alloc;
     llvm::StringSaver Saver{Alloc};
+
 #if LLVM_VERSION_MAJOR > 10
     std::vector<llvm::pdb::BulkPublic> m_PublicsSyms;
 #endif
@@ -46,6 +45,7 @@ public:
 
     void add_global_symbol(const char *name, uint16_t section_index, uint32_t section_offset);
     void add_global_symbol(const char *name, uint16_t section_index, uint32_t section_offset, TypeIndex type);
+    void add_udt_symbol(const char *name, TypeIndex type);
 
     bool commit(const char *InputPath, const char *OutputPath);
 
@@ -281,6 +281,21 @@ void pdb_file::add_global_symbol(const char *name, uint16_t section_index, uint3
 #endif
 }
 
+void pdb_file::add_udt_symbol(const char *name, TypeIndex typeIndex) {
+    auto symbol = UDTSym(SymbolKind::S_UDT);
+    llvm::StringRef s_name = Saver.save(name);
+    symbol.Name = s_name.data();
+    symbol.Type = typeIndex;
+
+    // Serialize the symbol into raw CodeView bytes
+    auto cvsym = SymbolSerializer::writeOneSymbol(symbol, *m_allocator, CodeViewContainer::Pdb);
+
+    // INJECT INTO THE GLOBAL SYMBOL STREAM (GSI)
+    // This is the exact stream IDA searches to populate the Local Types window
+    auto &GsiBuilder = m_pdb_builder->getGsiBuilder();
+    GsiBuilder.addGlobalSymbol(cvsym);
+}
+
 #if LLVM_VERSION_MAJOR > 10
 void pdb_file::finalize_public_symbols() {
     auto &GsiBuilder = m_pdb_builder->getGsiBuilder();
@@ -299,8 +314,10 @@ ContinuationRecordBuilder *pdb_file::create_field_list() {
 }
 
 TypeIndex pdb_file::add_pointer(TypeIndex type) {
+    auto ptr_kind = m_64_bit ? PointerKind::Near64 : PointerKind::Near32;
+    auto size = m_64_bit ? 8 : 4;
     auto ptr_record = PointerRecord(
-            type, PointerKind::Near32, PointerMode::Pointer, PointerOptions::None, 4
+            type, ptr_kind, PointerMode::Pointer, PointerOptions::None, size
     );
     return m_type_builder->writeLeafType(ptr_record);
 }
@@ -492,4 +509,9 @@ EXPORT uint32_t PDB_File_Add_Array(void *Instance, uint32_t Type, uint64_t Size)
 EXPORT uint32_t PDB_File_Add_Forward_Ref(void* Instance, const char* name) {
     auto pdb = (pdb_file *) Instance;
     return pdb->add_forward_ref(name).getIndex();
+}
+
+EXPORT void PDB_File_Add_UDT(void *Instance, const char *Name, uint32_t Type) {
+    auto pdb = (pdb_file *) Instance;
+    pdb->add_udt_symbol(Name, TypeIndex(Type));
 }
