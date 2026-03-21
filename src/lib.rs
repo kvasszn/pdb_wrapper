@@ -25,9 +25,51 @@ pub enum Error {
 
 #[derive(Debug, Clone)]
 pub struct PDBFunction {
-    ret: Box<PDBType>,
-    args: Vec<PDBType>,
-    cconv: CallingConvention,
+    pub ret: Box<PDBType>,
+    pub args: Vec<PDBType>,
+    pub class_type: Option<Box<PDBType>>,
+    pub cconv: CallingConvention,
+}
+
+impl Hash for PDBFunction {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.ret.hash(state);
+        self.args.hash(state);
+        if let Some(ct) = &self.class_type {
+            ct.hash(state);
+        }
+        self.cconv.hash(state);
+    }
+}
+
+impl PDBFunction {
+    pub fn new(
+        ret: PDBType,
+        args: &[PDBType],
+        class_type: Option<PDBType>,
+        cconv: CallingConvention,
+    ) -> Self {
+        PDBFunction {
+            ret: Box::new(ret),
+            args: args.to_vec(),
+            class_type: class_type.map(Box::new),
+            cconv,
+        }
+    }
+
+    pub fn new_ex(
+        ret: PDBType,
+        args: Vec<PDBType>,
+        class_type: Option<PDBType>,
+        cconv: CallingConvention,
+    ) -> Self {
+        PDBFunction {
+            ret: Box::new(ret),
+            args,
+            class_type: class_type.map(Box::new),
+            cconv,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -44,27 +86,10 @@ pub struct StructField {
     pub ty: PDBType,
     pub name: String,
     pub offset: u64,
+    pub is_static: bool,
 }
 
 impl Eq for PDBType {}
-
-impl Hash for PDBFunction {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.ret.hash(state);
-        self.args.hash(state);
-        self.cconv.hash(state);
-    }
-}
-
-impl PDBFunction {
-    pub fn new(ret: PDBType, args: &[PDBType], cconv: CallingConvention) -> Self {
-        PDBFunction {
-            ret: Box::new(ret),
-            args: args.to_vec(),
-            cconv,
-        }
-    }
-}
 
 impl Hash for PDBType {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -195,12 +220,33 @@ impl PDB {
         section_index: u16,
         section_rva: u32,
         name: &str,
-        ty: Option<u32>,
+        ty: Option<&PDBType>,
+        arg_names: &[&str],
     ) -> Result<(), Error> {
         let raw_name = CString::new(name)?;
+        let type_index = match ty {
+            Some(t) => Some(self.get_or_create_type(t)?),
+            None => None,
+        };
+
+        let mut arg_type_ids = Vec::new();
+        if let Some(PDBType::Function(f)) = ty {
+            for arg_ty in &f.args {
+                arg_type_ids.push(self.get_or_create_type(arg_ty)?);
+            }
+        }
+
+        let c_names: Vec<CString> = arg_names
+            .iter()
+            .map(|n| CString::new(*n).unwrap())
+            .collect();
+        let mut c_name_ptrs: Vec<*const std::ffi::c_char> =
+            c_names.iter().map(|n| n.as_ptr()).collect();
+
+        let safe_count = std::cmp::min(arg_type_ids.len(), c_name_ptrs.len()) as u64;
 
         unsafe {
-            match ty {
+            match type_index {
                 None => PDB_File_Add_Function(
                     self.handle,
                     raw_name.as_ptr(),
@@ -213,6 +259,9 @@ impl PDB {
                     section_index,
                     section_rva,
                     ty,
+                    c_name_ptrs.as_mut_ptr(),
+                    arg_type_ids.as_ptr(),
+                    safe_count,
                 ),
             }
         }
@@ -228,7 +277,7 @@ impl PDB {
         self.types.contains_key(ty)
     }
 
-    fn get_existing_type(&self, ty: &PDBType) -> Option<u32> {
+    pub fn get_existing_type(&self, ty: &PDBType) -> Option<u32> {
         if !self.is_existing_type(ty) {
             return None;
         }
@@ -301,6 +350,11 @@ impl PDB {
 
         let return_type = self.get_or_create_type(&meta.ret)?;
 
+        let class_type_idx = match &meta.class_type {
+            Some(ct) => self.get_or_create_type(ct)?,
+            None => 0,
+        };
+
         let args = meta
             .args
             .iter()
@@ -311,6 +365,7 @@ impl PDB {
             PDB_File_Add_Func_Data(
                 self.handle,
                 raw_name.as_ptr(),
+                class_type_idx,
                 return_type,
                 args.as_ptr(),
                 args.len() as u64,
@@ -342,10 +397,13 @@ impl PDB {
         for field in fields {
             match self.build_field_entry(&field) {
                 Ok((ty, raw_name)) => unsafe {
-                    PDB_File_Field_List_Add(field_list, ty, field.offset, raw_name.as_ptr())
+                    if field.is_static {
+                        PDB_File_Field_List_Add_Static(field_list, ty, raw_name.as_ptr())
+                    } else {
+                        PDB_File_Field_List_Add(field_list, ty, field.offset, raw_name.as_ptr())
+                    }
                 },
                 Err(e) => {
-                    // Clean up the memory we allocated earlier
                     unsafe { PDB_File_Field_List_Destroy(field_list) };
                     return Err(e);
                 }
@@ -362,10 +420,6 @@ impl PDB {
                 size,
             )
         };
-
-        unsafe {
-            //    PDB_File_Add_UDT(self.handle, raw_name.as_ptr(), ty);
-        }
 
         self.types.insert(PDBType::Struct(name.to_string()), ty);
 

@@ -53,27 +53,23 @@ public:
     static ContinuationRecordBuilder *create_field_list();
     static void delete_field_list(ContinuationRecordBuilder * contBuilder);
 
-
     TypeIndex finalize_field_list(ContinuationRecordBuilder *cbr);
 
-    TypeIndex
-    add_struct(const char *name, TypeIndex fields, uint16_t fieldCount, uint64_t size);
+    TypeIndex add_struct(const char *name, TypeIndex fields, uint16_t fieldCount, uint64_t size);
 
     TypeIndex add_forward_ref(const char *name);
 
-    static void add_field(ContinuationRecordBuilder *cbr, TypeIndex type, uint64_t offset,
-                          const char *name);
+    static void add_field(ContinuationRecordBuilder *cbr, TypeIndex type, uint64_t offset, const char *name);
+    static void add_static_field(ContinuationRecordBuilder *cbr, TypeIndex type, const char *name);
 
-
-    TypeIndex add_function_data(const char *Name, TypeIndex return_type,
-                                const std::vector<TypeIndex> &args, CallingConvention cconv,
-                                bool is_constructor);
+    TypeIndex add_function_data(const char *Name, TypeIndex class_type, TypeIndex return_type, const std::vector<TypeIndex> &args, CallingConvention cconv, bool is_constructor);
 
     TypeIndex add_pointer(TypeIndex type);
 
     TypeIndex add_array_type(TypeIndex type, uint64_t size);
 
     void add_function_symbol(const char *name, uint16_t section_index, uint32_t section_offset, TypeIndex fntype);
+    void add_function_symbol(const char *name, uint16_t section_index, uint32_t section_offset, TypeIndex fntype, const char **arg_names, const uint32_t *arg_types, size_t arg_count);
 
     std::unique_ptr<llvm::BumpPtrAllocator> m_allocator;
 
@@ -163,8 +159,7 @@ bool pdb_file::commit(const char *InputPath, const char *OutputPath) {
     DbiBuilder.setSectionMap(sectionMap);
 #endif
 
-    auto raw_sections_table = llvm::ArrayRef<uint8_t>(reinterpret_cast<const uint8_t *>(sections.begin()),
-                                                      reinterpret_cast<const uint8_t *>(sections.end()));
+    auto raw_sections_table = llvm::ArrayRef<uint8_t>(reinterpret_cast<const uint8_t *>(sections.begin()), reinterpret_cast<const uint8_t *>(sections.end()));
 
     if (DbiBuilder.addDbgStream(llvm::pdb::DbgHeaderType::SectionHdr, raw_sections_table)) {
         return false;
@@ -189,8 +184,62 @@ bool pdb_file::commit(const char *InputPath, const char *OutputPath) {
     return !m_pdb_builder->commit(OutputPath, &guid);
 }
 
-void
-pdb_file::add_function_symbol(const char *name, uint16_t section_index, uint32_t section_offset, TypeIndex fntype) {
+void pdb_file::add_function_symbol(const char *name, uint16_t section_index, uint32_t section_offset, TypeIndex fntype, const char **arg_names, const uint32_t *arg_types, size_t arg_count) {
+    add_function_symbol(name, section_index, section_offset);
+    auto proc = ProcSym(SymbolRecordKind::GlobalProcSym);
+    auto frameproc = FrameProcSym(SymbolRecordKind::FrameProcSym);
+    auto end = ScopeEndSym(SymbolRecordKind::ScopeEndSym);
+
+    llvm::StringRef s_name = Saver.save(name);
+    proc.Name = s_name.data();
+    proc.Segment = section_index;
+    proc.CodeOffset = section_offset;
+    proc.FunctionType = fntype;
+
+    auto cvsym = SymbolSerializer::writeOneSymbol(proc, *m_allocator, CodeViewContainer::Pdb);
+    auto cvsym_frame = SymbolSerializer::writeOneSymbol(frameproc, *m_allocator, CodeViewContainer::Pdb);
+
+    std::vector<llvm::codeview::CVSymbol> arg_syms;
+    for (size_t i = 0; i < arg_count; ++i) {
+        BPRelativeSym local(SymbolKind::S_BPREL32);
+        local.Type = TypeIndex(arg_types[i]);
+        local.Offset = 8 + (i * 8);
+        llvm::StringRef a_name = Saver.save(arg_names[i]);
+        local.Name = a_name.data();
+        arg_syms.push_back(SymbolSerializer::writeOneSymbol(local, *m_allocator, CodeViewContainer::Pdb));
+    }
+
+    auto cvsym_end = SymbolSerializer::writeOneSymbol(end, *m_allocator, CodeViewContainer::Pdb);
+
+    // gemini cooking some wacky stuff here idk but i think it fixed things
+    static uint32_t current_sym_offset = 4;
+    uint32_t proc_offset = current_sym_offset;
+    uint32_t frame_offset = proc_offset + cvsym.length();
+
+    uint32_t current_arg_offset = frame_offset + cvsym_frame.length();
+    for (auto &sym : arg_syms) {
+        current_arg_offset += sym.length();
+    }
+
+    uint32_t end_offset = current_arg_offset;
+    uint32_t next_offset = end_offset + cvsym_end.length();
+
+    uint32_t *end_ptr = reinterpret_cast<uint32_t*>(const_cast<uint8_t*>(cvsym.data().data()) + 8);
+    *end_ptr = end_offset;
+    current_sym_offset = next_offset;
+
+    auto &DbiBuilder = m_pdb_builder->getDbiBuilder();
+    static auto &mod = DbiBuilder.addModuleInfo("llvm-pdb-wrapper.o").get();
+
+    mod.addSymbol(cvsym);
+    mod.addSymbol(cvsym_frame);
+    for (auto &sym : arg_syms) {
+        mod.addSymbol(sym);
+    }
+    mod.addSymbol(cvsym_end);
+}
+
+void pdb_file::add_function_symbol(const char *name, uint16_t section_index, uint32_t section_offset, TypeIndex fntype) {
     add_function_symbol(name, section_index, section_offset);
     auto proc = ProcSym(SymbolRecordKind::GlobalProcSym);
     auto frameproc = FrameProcSym(SymbolRecordKind::FrameProcSym);
@@ -216,29 +265,29 @@ pdb_file::add_function_symbol(const char *name, uint16_t section_index, uint32_t
 
 void pdb_file::add_function_symbol(const char *name, uint16_t section_index, uint32_t section_offset) {
     auto &GsiBuilder = m_pdb_builder->getGsiBuilder();
-#if LLVM_VERSION_MAJOR > 10
+    #if LLVM_VERSION_MAJOR > 10
     auto symbol = llvm::pdb::BulkPublic();
-#else
+    #else
     auto symbol = PublicSym32(SymbolKind::S_PUB32);
-#endif
+    #endif
 
     llvm::StringRef s_name = Saver.save(name);
     symbol.Name = s_name.data();
     symbol.NameLen = s_name.size();
 
-#if LLVM_VERSION_MAJOR > 10
+    #if LLVM_VERSION_MAJOR > 10
     symbol.Flags |= static_cast<uint16_t>(PublicSymFlags::Function);
-#else
+    #else
     symbol.Flags |= PublicSymFlags::Function;
-#endif
+    #endif
 
     symbol.Segment = section_index;
     symbol.Offset = section_offset;
-#if LLVM_VERSION_MAJOR > 10
+    #if LLVM_VERSION_MAJOR > 10
     m_PublicsSyms.push_back(symbol);
-#else
+    #else
     GsiBuilder.addPublicSymbol(symbol);
-#endif
+    #endif
 }
 
 void pdb_file::add_global_symbol(const char *name, uint16_t section_index, uint32_t section_offset, TypeIndex typeIndex) {
@@ -262,23 +311,23 @@ void pdb_file::add_global_symbol(const char *name, uint16_t section_index, uint3
 
 void pdb_file::add_global_symbol(const char *name, uint16_t section_index, uint32_t section_offset) {
     auto &GsiBuilder = m_pdb_builder->getGsiBuilder();
-#if LLVM_VERSION_MAJOR > 10
+    #if LLVM_VERSION_MAJOR > 10
     auto symbol = llvm::pdb::BulkPublic();
-#else
+    #else
     auto symbol = PublicSym32(SymbolKind::S_PUB32);
-#endif
+    #endif
     llvm::StringRef s_name = Saver.save(name);
     symbol.Name = s_name.data();
     symbol.NameLen = s_name.size();
     symbol.Segment = section_index;
     symbol.Offset = section_offset;
-#if LLVM_VERSION_MAJOR > 10
+    #if LLVM_VERSION_MAJOR > 10
     symbol.Flags |= static_cast<uint16_t>(PublicSymFlags::Function | PublicSymFlags::Code);
     m_PublicsSyms.push_back(symbol);
-#else
+    #else
     symbol.Flags |= PublicSymFlags::Function | PublicSymFlags::Code;
     GsiBuilder.addPublicSymbol(symbol);
-#endif
+    #endif
 }
 
 void pdb_file::add_udt_symbol(const char *name, TypeIndex typeIndex) {
@@ -286,12 +335,7 @@ void pdb_file::add_udt_symbol(const char *name, TypeIndex typeIndex) {
     llvm::StringRef s_name = Saver.save(name);
     symbol.Name = s_name.data();
     symbol.Type = typeIndex;
-
-    // Serialize the symbol into raw CodeView bytes
     auto cvsym = SymbolSerializer::writeOneSymbol(symbol, *m_allocator, CodeViewContainer::Pdb);
-
-    // INJECT INTO THE GLOBAL SYMBOL STREAM (GSI)
-    // This is the exact stream IDA searches to populate the Local Types window
     auto &GsiBuilder = m_pdb_builder->getGsiBuilder();
     GsiBuilder.addGlobalSymbol(cvsym);
 }
@@ -317,7 +361,7 @@ TypeIndex pdb_file::add_pointer(TypeIndex type) {
     auto ptr_kind = m_64_bit ? PointerKind::Near64 : PointerKind::Near32;
     auto size = m_64_bit ? 8 : 4;
     auto ptr_record = PointerRecord(
-            type, ptr_kind, PointerMode::Pointer, PointerOptions::None, size
+        type, ptr_kind, PointerMode::Pointer, PointerOptions::None, size
     );
     return m_type_builder->writeLeafType(ptr_record);
 }
@@ -325,7 +369,7 @@ TypeIndex pdb_file::add_pointer(TypeIndex type) {
 TypeIndex pdb_file::add_array_type(TypeIndex type, uint64_t size) {
     // TODO: Why do array records need names?
     auto array_record = ArrayRecord(type, TypeIndex(m_64_bit ? SimpleTypeKind::Int64 : SimpleTypeKind::Int32), size,
-                                    "");
+        "");
 
     return m_type_builder->writeLeafType(array_record);
 }
@@ -341,20 +385,44 @@ void pdb_file::add_field(ContinuationRecordBuilder *cbr, TypeIndex type, uint64_
     cbr->writeMemberType(record);
 }
 
-TypeIndex pdb_file::add_function_data(const char *Name, TypeIndex return_type, const std::vector<TypeIndex> &args,
-                                      CallingConvention cconv, bool is_constructor) {
-    auto arglist = ArgListRecord(
-            TypeRecordKind::ArgList, args
-    );
+void pdb_file::add_static_field(ContinuationRecordBuilder *cbr, TypeIndex type, const char *name) {
+    auto record = StaticDataMemberRecord();
+    record.Kind = TypeRecordKind::StaticDataMember;
+    record.Attrs = MemberAttributes(MemberAccess::Public);
+    record.Type = type;
+    record.Name = name;
+    cbr->writeMemberType(record);
+}
+
+TypeIndex pdb_file::add_function_data(const char *Name, TypeIndex class_type, TypeIndex return_type, const std::vector<TypeIndex> &args, CallingConvention cconv, bool is_constructor) {
+    auto arglist = ArgListRecord(TypeRecordKind::ArgList, args);
     auto arglist_index = m_type_builder->writeLeafType(arglist);
-    auto record = ProcedureRecord(return_type, cconv,
-                                  is_constructor ? FunctionOptions::Constructor : FunctionOptions::None, args.size(),
-                                  arglist_index);
-    auto func_type = m_type_builder->writeLeafType(record);
 
-    auto func_id = FuncIdRecord(TypeIndex(0), func_type, Name);
+    TypeIndex func_type;
 
-    m_id_builder->writeLeafType(func_id);
+    if (class_type.getIndex() != 0) {
+        TypeIndex this_type = add_pointer(class_type);
+        auto record = MemberFunctionRecord(
+            return_type, class_type, this_type, cconv,
+            is_constructor ? FunctionOptions::Constructor : FunctionOptions::None,
+            args.size(), arglist_index, 0
+        );
+        func_type = m_type_builder->writeLeafType(record);
+
+        auto func_id = MemberFuncIdRecord(class_type, func_type, Name);
+        m_id_builder->writeLeafType(func_id);
+    }
+    else {
+        auto record = ProcedureRecord(
+            return_type, cconv,
+            is_constructor ? FunctionOptions::Constructor : FunctionOptions::None,
+            args.size(), arglist_index
+        );
+        func_type = m_type_builder->writeLeafType(record);
+
+        auto func_id = FuncIdRecord(TypeIndex(0), func_type, Name);
+        m_id_builder->writeLeafType(func_id);
+    }
 
     return func_type;
 }
@@ -372,7 +440,7 @@ TypeIndex pdb_file::add_struct(const char *name, TypeIndex fields, uint16_t fiel
 
     m_type_builder->getType(fields);
     auto classRecord = ClassRecord(TypeRecordKind::Struct, fieldCount, ClassOptions::None, fields, TypeIndex::None(),
-                                   TypeIndex::None(), size, name, name);
+        TypeIndex::None(), size, name, name);
 
     return m_type_builder->writeLeafType(classRecord);
 }
@@ -418,10 +486,9 @@ EXPORT void *PDB_File_Create(int Is64Bit) {
 }
 #endif
 
-EXPORT void PDB_File_Add_Typed_Function(void *Instance, const char *Name, uint16_t SectionIndex, uint32_t SectionOffset,
-                                        uint32_t Type) {
+EXPORT void PDB_File_Add_Typed_Function(void *Instance, const char *Name, uint16_t SectionIndex, uint32_t SectionOffset, uint32_t Type, const char ** ArgNames, const uint32_t *ArgTypes, size_t ArgCount) {
     auto pdb = (pdb_file *) Instance;
-    pdb->add_function_symbol(Name, SectionIndex, SectionOffset, TypeIndex(Type));
+    pdb->add_function_symbol(Name, SectionIndex, SectionOffset, TypeIndex(Type), ArgNames, ArgTypes, ArgCount);
 }
 
 EXPORT void PDB_File_Add_Function(void *Instance, const char *Name, uint16_t SectionIndex, uint32_t SectionOffset) {
@@ -445,9 +512,9 @@ EXPORT void PDB_File_Destroy(void *Instance) {
 
 EXPORT int PDB_File_Commit(void *Instance, const char *InputPath, const char *OutputPath) {
     auto pdb = (pdb_file *) Instance;
-#if LLVM_VERSION_MAJOR > 10
+    #if LLVM_VERSION_MAJOR > 10
     pdb->finalize_public_symbols();
-#endif
+    #endif
     return +pdb->commit(InputPath, OutputPath);
 }
 
@@ -479,19 +546,18 @@ EXPORT uint32_t PDB_File_Create_Struct(void *Instance, const char *Name, uint32_
     return pdb->add_struct(Name, type, FieldCount, Size).getIndex();
 }
 
-EXPORT uint32_t PDB_File_Add_Func_Data(void *Instance, const char *Name, uint32_t ReturnType, const uint32_t *Args,
-                       const size_t ArgCount, uint8_t CConv, int IsConstructor) {
+EXPORT uint32_t PDB_File_Add_Func_Data(void *Instance, const char *Name, uint32_t ClassType, uint32_t ReturnType, const uint32_t *Args, const size_t ArgCount, uint8_t CConv, int IsConstructor) {
     auto pdb = (pdb_file *) Instance;
+    const auto class_type = TypeIndex{ClassType};
     const auto return_type = TypeIndex{ReturnType};
     auto types = std::vector<TypeIndex>{};
 
     types.reserve(ArgCount);
-
     for (int i = 0; i < ArgCount; ++i) {
         types.emplace_back(TypeIndex(Args[i]));
     }
 
-    return pdb->add_function_data(Name, return_type, types, (CallingConvention) CConv, !!IsConstructor).getIndex();
+    return pdb->add_function_data(Name, class_type, return_type, types, (CallingConvention) CConv, !!IsConstructor).getIndex();
 }
 
 EXPORT uint32_t PDB_File_Add_Pointer(void *Instance, uint32_t Type) {
@@ -514,4 +580,9 @@ EXPORT uint32_t PDB_File_Add_Forward_Ref(void* Instance, const char* name) {
 EXPORT void PDB_File_Add_UDT(void *Instance, const char *Name, uint32_t Type) {
     auto pdb = (pdb_file *) Instance;
     pdb->add_udt_symbol(Name, TypeIndex(Type));
+}
+EXPORT void PDB_File_Field_List_Add_Static(void *CRBInstance, uint32_t Type, const char *Name) {
+    const auto type = TypeIndex{Type};
+    auto crb = (ContinuationRecordBuilder *) CRBInstance;
+    pdb_file::add_static_field(crb, type, Name);
 }

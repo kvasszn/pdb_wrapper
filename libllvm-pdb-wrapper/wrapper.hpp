@@ -39,11 +39,14 @@ EXPORT void PDB_File_Field_List_Add(void* CRBInstance, uint32_t Type, uint64_t O
 EXPORT void PDB_File_Field_List_Destroy(void* Builder);
 EXPORT uint32_t PDB_File_Field_List_Finalize(void* Instance, void* CRBInstance);
 EXPORT uint32_t PDB_File_Create_Struct(void *Instance, const char *Name, uint32_t Fields, uint16_t FieldCount, uint64_t Size);
-EXPORT uint32_t PDB_File_Add_Func_Data(void* Instance, const char* Name, uint32_t ReturnType, const uint32_t* Args, size_t ArgCount, uint8_t CConv, int IsConstructor);
+EXPORT uint32_t PDB_File_Add_Func_Data(void* Instance, const char* Name, uint32_t ClassType, uint32_t ReturnType, const uint32_t* Args, size_t ArgCount, uint8_t CConv, int IsConstructor);
 EXPORT uint32_t PDB_File_Add_Pointer(void* Instance, uint32_t Type);
 EXPORT uint32_t PDB_File_Add_Array(void* Instance, uint32_t Type, uint64_t Size);
-EXPORT void PDB_File_Add_Typed_Function(void *Instance, const char *Name, uint16_t SectionIndex, uint32_t SectionOffset, uint32_t Type);
+//EXPORT void PDB_File_Add_Typed_Function(void *Instance, const char *Name, uint16_t SectionIndex, uint32_t SectionOffset, uint32_t Type);
+EXPORT void PDB_File_Add_Typed_Function(void *Instance, const char *Name, uint16_t SectionIndex, uint32_t SectionOffset, uint32_t Type, const char ** ArgNames, const uint32_t *ArgTypes, size_t ArgCount);
+
 EXPORT void PDB_File_Add_Typed_Global(void *Instance, const char *Name, uint16_t SectionIndex, uint32_t SectionOffset, uint32_t TypeIndex);
 EXPORT uint32_t PDB_File_Add_Forward_Ref(void* Instance, const char* name);
 EXPORT void PDB_File_Add_UDT(void *Instance, const char *Name, uint32_t Type);
+EXPORT void PDB_File_Field_List_Add_Static(void *CRBInstance, uint32_t Type, const char *Name);
 #endif //LLVM_PDB_WRAPPER_WRAPPER_HPP
