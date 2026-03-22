@@ -17,7 +17,7 @@ pub enum Error {
         "LLVM failed to generate a valid PDB, please double check all paths or file a bug!"
     ))]
     LLVMError,
-    #[snafu(display("Tried to create a complex type!"))]
+    #[snafu(display("Tried to create a complex type! {}", ty))]
     BadType { ty: String },
     #[snafu(display("Unknown type {} was used!", ty))]
     UnknownType { ty: String },
@@ -327,6 +327,18 @@ impl PDB {
                 Ok(unsafe { PDB_File_Add_Array(self.handle, ty, *size as u64) })
             }
             PDBType::Function(func) => self.insert_function_metadata(func, ""),
+            PDBType::Struct(name) => {
+                if let Some(ty) = self.get_existing_type(ty) {
+                    Ok(ty)
+                } else {
+                    let raw_name = CString::new(name.as_str()).unwrap();
+                    let fwd_idx =
+                        unsafe { PDB_File_Add_Forward_Ref(self.handle, raw_name.as_ptr()) };
+
+                    self.types.insert(ty.clone(), fwd_idx);
+                    Ok(fwd_idx)
+                }
+            }
             _ => Err(Error::BadType {
                 ty: format!("{:?}", ty),
             }),
