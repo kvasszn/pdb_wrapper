@@ -4,14 +4,14 @@ use std::{env, path::PathBuf};
 use std::process::Command;
     use which::which;
 
-#[cfg(all(feature = "llvm_10", feature = "llvm_13"))]
+#[cfg(all(feature = "llvm_10", feature = "llvm_22"))]
 compile_error!("You may only enable one LLVM version");
 
 #[cfg(feature = "llvm_10")]
 const LLVM_VERSION: u32 = 10;
 
-#[cfg(feature = "llvm_13")]
-const LLVM_VERSION: u32 = 13;
+#[cfg(feature = "llvm_22")]
+const LLVM_VERSION: u32 = 22;
 
 fn version_specific_init() {
     // TODO: Does this work as expected on Windows?

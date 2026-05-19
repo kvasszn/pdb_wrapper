@@ -21,6 +21,6 @@ snafu = "0.9.0"
 pdb = "0.6"
 
 [features]
-default = ["llvm_13"]
+default = ["llvm_22"]
 llvm_10 = []
-llvm_13 = []
+llvm_22 = []

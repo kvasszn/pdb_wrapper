@@ -155,7 +155,7 @@ impl Drop for PDB {
 }
 
 impl PDB {
-    #[cfg(feature = "llvm_13")]
+    #[cfg(feature = "llvm_22")]
     pub fn new(
         is_64bit: bool,
         age: u32,
@@ -178,7 +178,7 @@ impl PDB {
             types: HashMap::new(),
         })
     }
-    #[cfg(not(feature = "llvm_13"))]
+    #[cfg(not(feature = "llvm_22"))]
     pub fn new(is_64bit: bool) -> Result<Self, Error> {
         // I use integers to represent booleans on the FFI boundary.
         // Booleans *probably* work but I don't care to find out if this is true for every platform.
@@ -518,7 +518,7 @@ mod tests {
 
         #[cfg(feature = "llvm_10")]
         let mut pdb = PDB::new(false).expect("Failed to create PDB instance.");
-        #[cfg(feature = "llvm_13")]
+        #[cfg(feature = "llvm_22")]
         let mut pdb = PDB::new(false, 1, 0, [0u8; 16]).expect("Failed to create PDB instance.");
 
         pdb.insert_global("TestSymbol", 1, 0x1337, None)

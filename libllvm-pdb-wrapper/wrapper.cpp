@@ -441,7 +441,7 @@ TypeIndex pdb_file::add_function_data(const char *Name, TypeIndex class_type, Ty
 }
 
 TypeIndex pdb_file::finalize_field_list(ContinuationRecordBuilder *cbr) {
-    cbr->end(m_type_builder->nextTypeIndex());
+    //cbr->end(m_type_builder->nextTypeIndex());
     auto index = m_type_builder->insertRecord(*cbr);
     delete cbr;
     return index;
