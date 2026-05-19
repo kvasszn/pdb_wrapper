@@ -1,3 +1,4 @@
+use bindgen::CargoCallbacks;
 use cmake::Config;
 use std::{env, path::PathBuf};
 use std::process::Command;
@@ -74,19 +75,13 @@ fn main() {
     println!("cargo:rerun-if-changed=libllvm-pdb-wrapper/wrapper.cpp");
 
     let bindings = bindgen::Builder::default()
-        // The input header we would like to generate
-        // bindings for.
         .header("libllvm-pdb-wrapper/wrapper.hpp")
         .clang_arg("-x").clang_arg("c++")
         .clang_arg("-std=c++17")
         .clang_arg(format!("-DLLVM_VERSION_MAJOR={}", LLVM_VERSION))
         .allowlist_function("PDB_File_.*")
-        // Tell cargo to invalidate the built crate whenever any of the
-        // included header files changed.
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks))
-        // Finish the builder and generate the bindings.
+        .parse_callbacks(Box::new(CargoCallbacks::new()))
         .generate()
-        // Unwrap the Result and panic on failure.
         .expect("Unable to generate bindings");
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
     bindings

@@ -19,6 +19,8 @@
 
 #include "wrapper.hpp"
 
+#include <llvm/ADT/APInt.h>
+#include <llvm/ADT/APSInt.h>
 #include <memory>
 #include <vector>
 
@@ -56,11 +58,13 @@ public:
     TypeIndex finalize_field_list(ContinuationRecordBuilder *cbr);
 
     TypeIndex add_struct(const char *name, TypeIndex fields, uint16_t fieldCount, uint64_t size);
+    TypeIndex add_enum(const char *name, TypeIndex fields, uint16_t fieldCount, TypeIndex underlyingType);
 
     TypeIndex add_forward_ref(const char *name);
 
     static void add_field(ContinuationRecordBuilder *cbr, TypeIndex type, uint64_t offset, const char *name);
     static void add_static_field(ContinuationRecordBuilder *cbr, TypeIndex type, const char *name);
+    static void add_enumerator(ContinuationRecordBuilder *cbr, uint64_t value, bool is_unsigned, const char *name);
 
     TypeIndex add_function_data(const char *Name, TypeIndex class_type, TypeIndex return_type, const std::vector<TypeIndex> &args, CallingConvention cconv, bool is_constructor);
 
@@ -113,8 +117,8 @@ bool pdb_file::initialize(bool is_64bit ,uint32_t Age,uint32_t Signature,llvm::c
     DbiBuilder.setAge(InfoBuilder.getAge());
     DbiBuilder.setVersionHeader(llvm::pdb::PdbDbiV70);
 
-    const auto machine = is_64bit ? llvm::COFF::MachineTypes::IMAGE_FILE_MACHINE_I386
-                                  : llvm::COFF::MachineTypes::IMAGE_FILE_MACHINE_AMD64;
+    const auto machine = is_64bit ? llvm::COFF::MachineTypes::IMAGE_FILE_MACHINE_AMD64
+                                  : llvm::COFF::MachineTypes::IMAGE_FILE_MACHINE_I386;
     DbiBuilder.setMachineType(machine);
     DbiBuilder.setFlags(llvm::pdb::DbiFlags::FlagHasCTypesMask);
 
@@ -394,6 +398,15 @@ void pdb_file::add_static_field(ContinuationRecordBuilder *cbr, TypeIndex type, 
     cbr->writeMemberType(record);
 }
 
+void pdb_file::add_enumerator(ContinuationRecordBuilder *cbr, uint64_t value, bool is_unsigned, const char *name) {
+    auto record = EnumeratorRecord(
+        MemberAccess::Public,
+        llvm::APSInt(llvm::APInt(64, value), is_unsigned),
+        name
+    );
+    cbr->writeMemberType(record);
+}
+
 TypeIndex pdb_file::add_function_data(const char *Name, TypeIndex class_type, TypeIndex return_type, const std::vector<TypeIndex> &args, CallingConvention cconv, bool is_constructor) {
     auto arglist = ArgListRecord(TypeRecordKind::ArgList, args);
     auto arglist_index = m_type_builder->writeLeafType(arglist);
@@ -443,6 +456,23 @@ TypeIndex pdb_file::add_struct(const char *name, TypeIndex fields, uint16_t fiel
         TypeIndex::None(), size, name, name);
 
     return m_type_builder->writeLeafType(classRecord);
+}
+
+TypeIndex pdb_file::add_enum(const char *name, TypeIndex fields, uint16_t fieldCount, TypeIndex underlyingType) {
+
+    assert(m_type_builder->getType(fields).kind() == TypeLeafKind::LF_FIELDLIST);
+
+    m_type_builder->getType(fields);
+    auto enumRecord = EnumRecord(
+        fieldCount,
+        ClassOptions::Scoped | ClassOptions::HasUniqueName,
+        fields,
+        name,
+        name,
+        underlyingType
+    );
+
+    return m_type_builder->writeLeafType(enumRecord);
 }
 
 TypeIndex pdb_file::add_forward_ref(const char *name) {
@@ -532,6 +562,11 @@ EXPORT void PDB_File_Field_List_Add(void *CRBInstance, uint32_t Type, uint64_t O
     pdb_file::add_field(crb, type, Offset, Name);
 }
 
+EXPORT void PDB_File_Field_List_Add_Enumerator(void *CRBInstance, uint64_t Value, int IsUnsigned, const char *Name) {
+    auto crb = (ContinuationRecordBuilder *) CRBInstance;
+    pdb_file::add_enumerator(crb, Value, !!IsUnsigned, Name);
+}
+
 EXPORT uint32_t
 
 PDB_File_Field_List_Finalize(void *Instance, void *CRBInstance) {
@@ -544,6 +579,13 @@ EXPORT uint32_t PDB_File_Create_Struct(void *Instance, const char *Name, uint32_
     const auto type = TypeIndex{Fields};
     auto pdb = (pdb_file *) Instance;
     return pdb->add_struct(Name, type, FieldCount, Size).getIndex();
+}
+
+EXPORT uint32_t PDB_File_Create_Enum(void *Instance, const char *Name, uint32_t Fields, uint16_t FieldCount, uint32_t UnderlyingType) {
+    const auto fields = TypeIndex{Fields};
+    const auto underlying_type = TypeIndex{UnderlyingType};
+    auto pdb = (pdb_file *) Instance;
+    return pdb->add_enum(Name, fields, FieldCount, underlying_type).getIndex();
 }
 
 EXPORT uint32_t PDB_File_Add_Func_Data(void *Instance, const char *Name, uint32_t ClassType, uint32_t ReturnType, const uint32_t *Args, const size_t ArgCount, uint8_t CConv, int IsConstructor) {

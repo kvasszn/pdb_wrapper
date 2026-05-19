@@ -89,6 +89,13 @@ pub struct StructField {
     pub is_static: bool,
 }
 
+#[derive(Debug)]
+pub struct PDBEnumVariant {
+    pub name: String,
+    pub value: u64,
+    pub is_unsigned: bool,
+}
+
 impl Eq for PDBType {}
 
 impl Hash for PDBType {
@@ -331,7 +338,7 @@ impl PDB {
                 if let Some(ty) = self.get_existing_type(ty) {
                     Ok(ty)
                 } else {
-                    let raw_name = CString::new(name.as_str()).unwrap();
+                    let raw_name = CString::new(name.as_str())?;
                     let fwd_idx =
                         unsafe { PDB_File_Add_Forward_Ref(self.handle, raw_name.as_ptr()) };
 
@@ -433,6 +440,53 @@ impl PDB {
             )
         };
 
+        unsafe { PDB_File_Add_UDT(self.handle, raw_name.as_ptr(), ty) };
+        self.types.insert(PDBType::Struct(name.to_string()), ty);
+
+        Ok(())
+    }
+
+    pub fn insert_enum(
+        &mut self,
+        name: &str,
+        underlying_type: &PDBType,
+        variants: &[PDBEnumVariant],
+    ) -> Result<(), Error> {
+        let raw_name = CString::new(name)?;
+        let underlying_type = self.get_or_create_type(underlying_type)?;
+
+        let field_list = unsafe { PDB_File_Field_List_Create() };
+
+        for variant in variants {
+            let raw_variant_name = match CString::new(variant.name.as_str()) {
+                Ok(name) => name,
+                Err(e) => {
+                    unsafe { PDB_File_Field_List_Destroy(field_list) };
+                    return Err(e.into());
+                }
+            };
+            unsafe {
+                PDB_File_Field_List_Add_Enumerator(
+                    field_list,
+                    variant.value,
+                    if variant.is_unsigned { 1 } else { 0 },
+                    raw_variant_name.as_ptr(),
+                )
+            };
+        }
+
+        let fields = unsafe { PDB_File_Field_List_Finalize(self.handle, field_list) };
+        let ty = unsafe {
+            PDB_File_Create_Enum(
+                self.handle,
+                raw_name.as_ptr(),
+                fields,
+                variants.len() as u16,
+                underlying_type,
+            )
+        };
+
+        unsafe { PDB_File_Add_UDT(self.handle, raw_name.as_ptr(), ty) };
         self.types.insert(PDBType::Struct(name.to_string()), ty);
 
         Ok(())
