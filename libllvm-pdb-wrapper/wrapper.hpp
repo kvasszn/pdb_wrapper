@@ -24,6 +24,11 @@
     #pragma warning Unknown dynamic link import/export semantics.
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+
 #if LLVM_VERSION_MAJOR > 10
     EXPORT void *PDB_File_Create(int Is64Bit,uint32_t Age,uint32_t Signature,uint8_t const *GUIDData);
 #else
@@ -49,4 +54,8 @@ EXPORT void PDB_File_Add_Typed_Global(void *Instance, const char *Name, uint16_t
 EXPORT uint32_t PDB_File_Add_Forward_Ref(void* Instance, const char* name);
 EXPORT void PDB_File_Add_UDT(void *Instance, const char *Name, uint32_t Type);
 EXPORT void PDB_File_Field_List_Add_Static(void *CRBInstance, uint32_t Type, const char *Name);
+
+#ifdef __cplusplus
+}
+#endif
 #endif //LLVM_PDB_WRAPPER_WRAPPER_HPP

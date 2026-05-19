@@ -77,8 +77,10 @@ fn main() {
         // The input header we would like to generate
         // bindings for.
         .header("libllvm-pdb-wrapper/wrapper.hpp")
+        .clang_arg("-x").clang_arg("c++")
+        .clang_arg("-std=c++17")
         .clang_arg(format!("-DLLVM_VERSION_MAJOR={}", LLVM_VERSION))
-        .whitelist_function("PDB_File_.*")
+        .allowlist_function("PDB_File_.*")
         // Tell cargo to invalidate the built crate whenever any of the
         // included header files changed.
         .parse_callbacks(Box::new(bindgen::CargoCallbacks))

@@ -1,5 +1,5 @@
 cmake_minimum_required (VERSION 3.13)
-project(llvm-pdb-wrapper CXX)
+project(llvm-pdb-wrapper C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 

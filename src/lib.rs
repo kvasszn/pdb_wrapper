@@ -261,7 +261,7 @@ impl PDB {
                     ty,
                     c_name_ptrs.as_mut_ptr(),
                     arg_type_ids.as_ptr(),
-                    safe_count,
+                    safe_count as usize,
                 ),
             }
         }
@@ -380,7 +380,7 @@ impl PDB {
                 class_type_idx,
                 return_type,
                 args.as_ptr(),
-                args.len() as u64,
+                args.len(),
                 meta.cconv as u8,
                 0,
             )
